@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+<title>دوري وثاق</title>
+<link rel="stylesheet" href="assets/css/theme.css"/>
+<link rel="stylesheet" href="assets/css/components.css"/>
+<style>
+  /* ====== الصفحة الرئيسية ====== */
+  .landing-wrap{ min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px; }
+  .landing-emoji{ font-size:56px;margin-bottom:10px; }
+  .landing-wrap h1{ font-size:26px;font-weight:800;margin-bottom:4px; }
+  .landing-wrap p{ font-size:14px;color:var(--text2);margin-bottom:32px; }
+  .entry-grid{ width:100%;max-width:380px;display:flex;flex-direction:column;gap:14px; }
+  .entry-btn{
+    display:flex;align-items:center;gap:14px;padding:18px 20px;border-radius:var(--radius-lg);
+    text-decoration:none;color:var(--text);
+  }
+  .entry-btn .icon{ font-size:28px;flex-shrink:0; }
+  .entry-btn .label{ font-weight:800;font-size:15px; }
+  .entry-btn .sub{ font-size:11px;color:var(--text2);margin-top:2px; }
+  .entry-btn.primary-entry{
+    background:linear-gradient(135deg, var(--accent), var(--accent2));color:#fff;border:1px solid var(--gold);
+    box-shadow:0 12px 28px -10px rgba(26,58,92,.5);
+  }
+  .entry-btn.primary-entry .sub{ color:rgba(255,255,255,.75); }
+  .entry-btn:active{ transform:scale(.97); }
+
+  @keyframes fadeSlideUp{
+    from{ opacity:0; transform:translateY(18px); }
+    to{ opacity:1; transform:translateY(0); }
+  }
+  .landing-wrap h1, .landing-wrap p, .entry-grid .entry-btn{ opacity:0; }
+  #landingWrap.reveal h1{ animation: fadeSlideUp .6s ease 0s both; }
+  #landingWrap.reveal p{ animation: fadeSlideUp .6s ease .1s both; }
+  #landingWrap.reveal .entry-grid .entry-btn{ animation: fadeSlideUp .55s ease both; }
+  #landingWrap.reveal .entry-grid .entry-btn:nth-child(1){ animation-delay:.2s; }
+  #landingWrap.reveal .entry-grid .entry-btn:nth-child(2){ animation-delay:.3s; }
+  #landingWrap.reveal .entry-grid .entry-btn:nth-child(3){ animation-delay:.4s; }
+  #landingWrap.reveal .entry-grid .entry-btn:nth-child(4){ animation-delay:.5s; }
+  @media (prefers-reduced-motion:reduce){
+    .landing-wrap h1, .landing-wrap p, .entry-grid .entry-btn{ animation:none !important; opacity:1 !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="landing-wrap reveal" id="landingWrap">
+  <div class="landing-emoji">⚽</div>
+  <h1>دوري وثاق</h1>
+  <p>اختر طريقة الدخول</p>
+
+  <div class="entry-grid">
+    <a href="standings.html" class="entry-btn primary-entry glass">
+      <span class="icon">⚽</span>
+      <div><div class="label">متابعة الدوري</div><div class="sub">الترتيب والمباريات — بدون تسجيل دخول</div></div>
+    </a>
+    <a href="login.html?as=captain" class="entry-btn glass">
+      <span class="icon">🎽</span>
+      <div><div class="label">دخول الكباتن</div><div class="sub">لإدارة فريقك وصفقاته</div></div>
+    </a>
+    <a href="login.html?as=admin" class="entry-btn glass">
+      <span class="icon">👑</span>
+      <div><div class="label">دخول الإدارة</div><div class="sub">لوحة التحكم الكاملة بالدوري</div></div>
+    </a>
+    <a href="scoreboard.html" class="entry-btn glass">
+      <span class="icon">🔢</span>
+      <div><div class="label">عدّاد النقاط</div><div class="sub">لتسجيل نقاط المباراة لحظيًا أثناء اللعب</div></div>
+    </a>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="js/supabaseClient.js"></script><script src="js/auth.js"></script>
+<script src="js/ui/theme.js"></script>
+<script>
+(async function(){
+  const session = await getSession();
+  if(session){ window.location.replace("standings.html"); return; }
+})();
+</script>
+</body>
+</html>
