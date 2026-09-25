@@ -4,10 +4,10 @@ const REACTION_EMOJIS = ["❤️", "🔥", "👏", "😂"];
 // الزوار دون ما يحتاج حساب حقيقي، عشان يقدر يتفاعل مثل أي كابتن بالضبط.
 function getGuestKey(){
   try{
-    let key = localStorage.getItem("dawri_guest_key");
+    let key = localStorage.getItem("wathaq_guest_key");
     if(!key){
       key = crypto.randomUUID();
-      localStorage.setItem("dawri_guest_key", key);
+      localStorage.setItem("wathaq_guest_key", key);
     }
     return key;
   }catch(err){
@@ -26,16 +26,21 @@ async function listReactions(contentType, contentIds){
   return data;
 }
 
-async function toggleReaction(contentType, contentId, emoji, myUserId, mine){
+// تفاعل واحد بس لكل هوية على نفس المحتوى: يضيفه لو ما عنده شي، يبدّل الإيموجي لو
+// كان مسجّل غيره، أو يشيله بالكامل لو ضغط نفس إيموجيه الحالي مرة ثانية.
+async function setReaction(contentType, contentId, emoji, myUserId, currentEmoji){
   const identity = myUserId
     ? { column: "reacted_by", value: myUserId, row: { reacted_by: myUserId } }
     : { column: "guest_key", value: getGuestKey(), row: { guest_key: getGuestKey() } };
   if(!identity.value) throw new Error("تعذّر تحديد هويتك للتفاعل بهذا المتصفح");
 
-  if(mine){
+  if(currentEmoji === emoji){
     const { error } = await sb.from("content_reactions").delete()
-      .eq("content_type", contentType).eq("content_id", contentId)
-      .eq("emoji", emoji).eq(identity.column, identity.value);
+      .eq("content_type", contentType).eq("content_id", contentId).eq(identity.column, identity.value);
+    if(error) throw error;
+  }else if(currentEmoji){
+    const { error } = await sb.from("content_reactions").update({ emoji })
+      .eq("content_type", contentType).eq("content_id", contentId).eq(identity.column, identity.value);
     if(error) throw error;
   }else{
     const { error } = await sb.from("content_reactions").insert({

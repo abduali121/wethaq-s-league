@@ -104,6 +104,20 @@ async function setLineup(matchId, teamId, playerIds){
   return data;
 }
 
+async function setLineupPosition(matchId, playerId, slot){
+  const { data, error } = await sb.rpc("set_lineup_position", {
+    p_match_id: matchId, p_player_id: playerId, p_slot: slot,
+  });
+  if(error) throw error;
+  return data;
+}
+
+async function setKitMissing(matchId, playerId){
+  const { data, error } = await sb.rpc("set_kit_missing", { p_match_id: matchId, p_player_id: playerId });
+  if(error) throw error;
+  return data;
+}
+
 async function listMatchEvents(matchId){
   const { data, error } = await sb
     .from("match_events")

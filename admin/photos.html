@@ -41,6 +41,13 @@
   .photo-caption{ font-size:13px;font-weight:600;line-height:1.6; }
   .photo-meta{ font-size:11px;color:var(--text2);margin-top:6px; }
   .photo-del{ flex-shrink:0;background:none;border:none;color:var(--red);font-size:16px;cursor:pointer;padding:4px; }
+  .reward-row{ display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px; }
+  .reward-count{ font-size:11px;font-weight:800;color:var(--text2); }
+  .reward-btn{
+    font-size:10.5px;font-weight:800;padding:4px 10px;border-radius:999px;border:1px solid var(--gold);
+    background:var(--gold-light);color:var(--gold-deep);cursor:pointer;
+  }
+  .reward-granted{ font-size:10.5px;font-weight:800;padding:4px 10px;border-radius:999px;background:var(--green-bg);color:var(--green); }
 </style>
 </head>
 <body>
@@ -78,17 +85,12 @@
 <script src="../js/ui/adminNav.js"></script>
 <script src="../js/api/teams.js"></script>
 <script src="../js/api/photos.js"></script>
+<script src="../js/ui/dates.js"></script>
+<script src="../js/api/reactions.js"></script>
+<script src="../js/api/rewards.js"></script>
 <script>
 let selectedImageFile = null;
 let photosCache = [];
-
-function timeAgo(dateStr){
-  const diffMin = Math.max(1, Math.round((Date.now() - new Date(dateStr).getTime()) / 60000));
-  if(diffMin < 60) return `قبل ${diffMin} د`;
-  const diffHr = Math.round(diffMin / 60);
-  if(diffHr < 24) return `قبل ${diffHr} س`;
-  return `قبل ${Math.round(diffHr / 24)} يوم`;
-}
 
 function clearImage(){
   selectedImageFile = null;
@@ -105,24 +107,55 @@ document.getElementById("imageInput").addEventListener("change", (e) => {
   document.getElementById("photoFrame").classList.add("show");
 });
 
-function renderList(items){
-  document.getElementById("photosList").innerHTML = items.map(p => `
+function rewardRowHtml(contentId, reactionCount, granted){
+  const mine = granted.filter(g => g.content_id === contentId);
+  const grantedTiers = new Map(mine.map(g => [g.tier_threshold, g.amount]));
+  const alreadyPaid = mine.reduce((sum, g) => sum + g.amount, 0);
+  const tiers = REACTION_REWARD_TIERS.photo.map(t => {
+    if(grantedTiers.has(t.tier)) return `<span class="reward-granted">✓ منحت ${grantedTiers.get(t.tier)} (${t.tier}+)</span>`;
+    if(reactionCount >= t.tier){
+      const incremental = t.amount - alreadyPaid; // الأرقام إجمالي متراكم — يمنح بس الفرق عن اللي سبق واستلمه
+      if(incremental <= 0) return "";
+      return `<button class="reward-btn" onclick="onGrantReward('${contentId}', ${t.tier})">منح ${incremental} وثاق (يوصّله ${t.amount} إجمالي)</button>`;
+    }
+    return "";
+  }).join("");
+  return `<div class="reward-row"><span class="reward-count">🔥 ${reactionCount} تفاعل</span>${tiers}</div>`;
+}
+
+async function onGrantReward(contentId, tier){
+  if(!confirm("منح هذي المكافأة للفريق؟")) return;
+  try{ await grantReactionReward("photo", contentId, tier); showToast("تم منح المكافأة", "success"); await reload(); }
+  catch(err){ showToast(err.message, "error"); }
+}
+
+function renderList(items, reactionRows, granted){
+  document.getElementById("photosList").innerHTML = items.map(p => {
+    const count = reactionRows.filter(r => r.content_id === p.id).length;
+    return `
     <div class="photo-card glass">
       <div class="frame"><img src="${p.image_url}" alt=""/></div>
       <div class="photo-card-head">
         <div>
           ${p.caption ? `<div class="photo-caption">${p.caption}</div>` : ''}
           <div class="photo-meta">${p.team ? p.team.name : 'الإدارة'} · ${timeAgo(p.created_at)}</div>
+          ${p.team_id ? rewardRowHtml(p.id, count, granted) : ''}
         </div>
         <button class="photo-del" title="حذف" onclick="onDelete('${p.id}')">✕</button>
       </div>
     </div>
-  `).join("") || `<div class="empty-state">لا توجد صور بعد. أضف أول صورة!</div>`;
+  `;
+  }).join("") || `<div class="empty-state">لا توجد صور بعد. أضف أول صورة!</div>`;
 }
 
 async function reload(){
   photosCache = await listPhotos(50);
-  renderList(photosCache);
+  const ids = photosCache.map(p => p.id);
+  const [reactionRows, granted] = await Promise.all([
+    listReactions("photo", ids).catch(() => []),
+    listGrantedReactionRewards("photo", ids).catch(() => []),
+  ]);
+  renderList(photosCache, reactionRows, granted);
 }
 
 async function onPublish(){

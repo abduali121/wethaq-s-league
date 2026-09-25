@@ -2670,3 +2670,414 @@ left join loan_stats ls on ls.player_id = p.id
 where coalesce(ls.loan_earnings, 0) > 0;
 
 grant select on player_loan_demand to anon, authenticated;
+
+-- دوري وثاق: يسمح للإدارة تقفل باب التعاقدات/صفقات الإعارة بالكامل بضغطة، بأي وقت
+-- تحدده هي (مثلاً قبل بداية مباريات الأسبوع بشوي)، عشان كباتن متأخرين ما يقدرون
+-- يسجّلون صفقات بعد فوات الأوان. قفل واحد يشمل كل الدوري، ترفعه الإدارة يدويًا.
+-- =============================================================================
+
+create table league_settings (
+  id            boolean primary key default true,
+  claims_locked boolean not null default false,
+  constraint league_settings_singleton check (id)
+);
+insert into league_settings (id, claims_locked) values (true, false);
+
+alter table league_settings enable row level security;
+create policy sel_league_settings on league_settings for select to authenticated, anon using (true);
+grant select on league_settings to anon, authenticated;
+
+create or replace function set_claims_lock(p_locked boolean)
+returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not is_admin() then raise exception 'forbidden: admin only'; end if;
+  update league_settings set claims_locked = p_locked where id = true;
+  perform log_audit('set_claims_lock', 'league_settings', 'singleton', null, jsonb_build_object('claims_locked', p_locked));
+end; $$;
+grant execute on function set_claims_lock(boolean) to authenticated;
+
+-- نفس claim_player_loan بالضبط (من 0024) + فحص القفل كأول شرط
+create or replace function claim_player_loan(
+  p_match_id uuid, p_player_id uuid, p_amount integer, p_note text default null
+) returns loan_claims
+language plpgsql security definer set search_path = public as $$
+declare
+  v_match matches;
+  v_player players;
+  v_team_id uuid;
+  v_opponent_id uuid;
+  v_existing loan_claims;
+  v_claim loan_claims;
+begin
+  if (select claims_locked from league_settings where id = true) then
+    raise exception 'الإدارة أغلقت باب التعاقدات مؤقتًا';
+  end if;
+
+  v_team_id := my_team_id();
+  if v_team_id is null then raise exception 'forbidden: team captains only'; end if;
+
+  select * into v_match from matches where id = p_match_id;
+  if not found then raise exception 'match not found'; end if;
+  if v_team_id not in (v_match.team_a_id, v_match.team_b_id) then
+    raise exception 'only the two teams playing this match may sign a loan for it';
+  end if;
+
+  select * into v_player from players where id = p_player_id;
+  if v_team_id = v_player.original_team_id then
+    raise exception 'a team cannot sign its own player';
+  end if;
+
+  v_opponent_id := case when v_team_id = v_match.team_a_id then v_match.team_b_id else v_match.team_a_id end;
+  if v_player.original_team_id = v_opponent_id then
+    raise exception 'cannot sign a player from the team you are facing this match';
+  end if;
+
+  select * into v_existing from loan_claims
+    where match_id = p_match_id and player_id = p_player_id and status = 'approved';
+  if found then raise exception 'this player is already signed by another team for this match'; end if;
+
+  insert into loan_claims (match_id, player_id, claiming_team_id, original_team_id, amount, note)
+  values (p_match_id, p_player_id, v_team_id, v_player.original_team_id, p_amount, p_note)
+  returning * into v_claim;
+
+  perform log_audit('claim_player_loan', 'loan_claims', v_claim.id::text, null, to_jsonb(v_claim));
+  return v_claim;
+end; $$;
+
+-- دوري وثاق: مكافأة وثاق للفريق صاحب التصريح/الصورة كلما وصل عدد التفاعلات عليه
+-- (من الكل، حتى الزوار) درجة معيّنة. الإدارة توافق يدويًا (حماية من تفاعلات وهمية)،
+-- وكل درجة تُمنح مرة واحدة أبدًا لكل محتوى — حتى لو نقص عدد التفاعلات ورجع زاد،
+-- ما تُمنح ثانية لنفس الدرجة (قيد UNIQUE يمنع هذا تمامًا).
+--
+-- الأرقام بالجدول هي "إجمالي متراكم" لا مبلغ إضافي مستقل لكل درجة — يعني لو سبق
+-- ومنحت درجة 10 (20 وثاق)، ومنحت بعدها درجة 25 (إجماليها 50)، الفريق ياخذ فرق
+-- الاثنين بس (30 وثاق إضافية)، مو الـ50 كاملة، عشان ما يصير له إجمالي أكثر من قيمة
+-- الدرجة اللي وصلها فعليًا.
+--
+-- جدول التصريحات (إجمالي متراكم):  10 تفاعل → 20 وثاق · 25 → 50 · 50 → 100
+-- جدول الصور (ضِعف، إجمالي متراكم): 10 تفاعل → 40 وثاق · 25 → 100 · 50 → 200
+-- =============================================================================
+
+alter type ledger_reason add value if not exists 'reaction_reward';
+
+create table content_reaction_rewards (
+  id             uuid primary key default gen_random_uuid(),
+  content_type   text not null check (content_type in ('announcement', 'photo')),
+  content_id     uuid not null,
+  tier_threshold integer not null,
+  amount         integer not null,
+  team_id        uuid not null references teams(id),
+  granted_by     uuid references profiles(id),
+  created_at     timestamptz not null default now(),
+  unique (content_type, content_id, tier_threshold)
+);
+
+alter table content_reaction_rewards enable row level security;
+create policy sel_reaction_rewards on content_reaction_rewards for select to authenticated, anon using (true);
+grant select on content_reaction_rewards to anon, authenticated;
+
+create or replace function grant_reaction_reward(p_content_type text, p_content_id uuid, p_tier integer)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_team_id uuid;
+  v_reaction_count integer;
+  v_tier_total integer;
+  v_already_paid integer;
+  v_amount integer;
+  v_team teams;
+  v_new_balance integer;
+begin
+  if not is_admin() then raise exception 'forbidden: admin only'; end if;
+
+  if p_content_type = 'announcement' then
+    select team_id into v_team_id from league_announcements where id = p_content_id;
+  elsif p_content_type = 'photo' then
+    select team_id into v_team_id from league_photos where id = p_content_id;
+  else
+    raise exception 'invalid content type';
+  end if;
+
+  if not found then raise exception 'content not found'; end if;
+  if v_team_id is null then raise exception 'لا يوجد فريق مستفيد — هذا المحتوى منشور باسم الإدارة'; end if;
+
+  select count(*) into v_reaction_count from content_reactions
+    where content_type = p_content_type and content_id = p_content_id;
+  if v_reaction_count < p_tier then
+    raise exception 'عدد التفاعلات الحالي (%) أقل من الدرجة المطلوبة (%)', v_reaction_count, p_tier;
+  end if;
+
+  v_tier_total := case
+    when p_content_type = 'announcement' and p_tier = 10 then 20
+    when p_content_type = 'announcement' and p_tier = 25 then 50
+    when p_content_type = 'announcement' and p_tier = 50 then 100
+    when p_content_type = 'photo' and p_tier = 10 then 40
+    when p_content_type = 'photo' and p_tier = 25 then 100
+    when p_content_type = 'photo' and p_tier = 50 then 200
+    else null
+  end;
+  if v_tier_total is null then raise exception 'invalid tier'; end if;
+
+  -- الأرقام إجمالي متراكم — نمنح بس الفرق عن أي درجات أقل اتمنحت قبل لنفس المحتوى
+  select coalesce(sum(amount), 0) into v_already_paid from content_reaction_rewards
+    where content_type = p_content_type and content_id = p_content_id;
+  v_amount := v_tier_total - v_already_paid;
+  if v_amount <= 0 then
+    raise exception 'الفريق مستلم مسبقًا مبلغ يساوي أو أكبر من إجمالي هذي الدرجة';
+  end if;
+
+  select * into v_team from teams where id = v_team_id for update;
+  v_new_balance := v_team.balance_wathaq + v_amount;
+
+  insert into content_reaction_rewards (content_type, content_id, tier_threshold, amount, team_id, granted_by)
+  values (p_content_type, p_content_id, p_tier, v_amount, v_team_id, auth.uid());
+
+  insert into balance_ledger (team_id, delta, balance_after, reason, note, created_by)
+  values (v_team_id, v_amount, v_new_balance, 'reaction_reward',
+    (case when p_content_type = 'announcement' then 'مكافأة تفاعل تصريح' else 'مكافأة تفاعل صورة' end) || ' — ' || v_reaction_count || ' تفاعل',
+    auth.uid());
+  update teams set balance_wathaq = v_new_balance where id = v_team_id;
+
+  perform log_audit('grant_reaction_reward', 'content_reaction_rewards', p_content_id::text,
+    null, jsonb_build_object('content_type', p_content_type, 'tier', p_tier, 'amount', v_amount));
+exception
+  when unique_violation then
+    raise exception 'هذي الدرجة اتمنحت مسبقًا لهذا المحتوى';
+end; $$;
+
+grant execute on function grant_reaction_reward(text, uuid, integer) to authenticated;
+
+-- دوري وثاق: تفاعل واحد بس لكل شخص (حساب أو ضيف) على نفس التصريح/الصورة — قبل كذا
+-- كان يقدر يضغط الأربع إيموجيات مع بعض على نفس المحتوى، يعني شخص وحد يسجّل كأربع
+-- تفاعلات! هذا كان يسهّل الوصول لدرجات مكافأة التفاعل بشكل مصطنع. الحين: يضغط إيموجي
+-- ثاني ينقل تفاعله له (يشيل القديم)، ويضغط نفس إيموجيه الحالي يشيل تفاعله بالكامل.
+-- =============================================================================
+
+-- تنظيف البيانات القديمة أول: لو نفس الشخص عنده أكثر من تفاعل على نفس المحتوى
+-- (بسبب الثغرة)، نحتفظ بأقدم واحد بس ونحذف الباقي، قبل ما نضيف القيد الأصرم
+delete from content_reactions where id in (
+  select id from (
+    select id, row_number() over (
+      partition by content_type, content_id, coalesce(reacted_by::text, guest_key)
+      order by created_at asc, id asc
+    ) as rn
+    from content_reactions
+  ) ranked where rn > 1
+);
+
+drop index if exists uq_reaction_identity;
+create unique index uq_reaction_identity on content_reactions(
+  content_type, content_id, coalesce(reacted_by::text, guest_key)
+);
+
+-- يحتاج تحديث سطر تفاعله الحالي (يبدّل الإيموجي) بدل حذف وإدراج من جديد
+create policy upd_reactions_auth on content_reactions for update to authenticated
+  using (reacted_by = auth.uid())
+  with check (reacted_by = auth.uid() and guest_key is null);
+create policy upd_reactions_guest on content_reactions for update to anon
+  using (reacted_by is null and guest_key is not null)
+  with check (reacted_by is null and guest_key is not null);
+
+grant update on content_reactions to anon, authenticated;
+
+-- دوري وثاق: قاعدة "لازم تجيب بدلتك الرياضية" — لو لاعب ما جابها، تُطبَّق العقوبة
+-- حسب نوعه بهذي المباراة بالذات:
+--   • لاعب أصلي بفريقه (مو معار): خصم فوري وثابت 40 وثاق من فريقه، بغض النظر عن
+--     نتيجة المباراة (يُطبَّق لحظة ما يعلّمه المدير).
+--   • لاعب معار لهذي المباراة: ما فيه خصم فوري — بس قيمة صفقة الإعارة تُنصَّف
+--     تلقائيًا (بدل كاملة) لما تُعتمد نتيجة المباراة، ولو فاز المستعير فقط (نفس
+--     شرط استحقاق رسم الإعارة الأصلي).
+-- =============================================================================
+
+alter table match_lineups add column kit_missing boolean not null default false;
+
+alter type ledger_reason add value if not exists 'kit_penalty';
+
+create or replace function set_kit_missing(p_match_id uuid, p_player_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_lineup match_lineups;
+  v_player players;
+  v_team teams;
+  v_new_balance integer;
+begin
+  if not is_admin() then raise exception 'forbidden: admin only'; end if;
+
+  select * into v_lineup from match_lineups where match_id = p_match_id and player_id = p_player_id for update;
+  if not found then raise exception 'player not in this match lineup'; end if;
+  if v_lineup.kit_missing then raise exception 'مسجّل عليه خصم البدلة مسبقًا لهذي المباراة'; end if;
+
+  select * into v_player from players where id = p_player_id;
+  update match_lineups set kit_missing = true where id = v_lineup.id;
+
+  -- لاعب أصلي بفريقه بهذي المباراة (مو معار): خصم فوري وثابت
+  if v_player.original_team_id = v_lineup.team_id then
+    select * into v_team from teams where id = v_lineup.team_id for update;
+    v_new_balance := v_team.balance_wathaq - 40;
+    insert into balance_ledger (team_id, delta, balance_after, reason, match_id, created_by)
+    values (v_lineup.team_id, -40, v_new_balance, 'kit_penalty', p_match_id, auth.uid());
+    update teams set balance_wathaq = v_new_balance where id = v_lineup.team_id;
+  end if;
+  -- لاعب معار: ما فيه خصم هنا — ينصّف رسم الإعارة تلقائيًا داخل confirm_match_result
+
+  perform log_audit('set_kit_missing', 'match_lineups', v_lineup.id::text, null, jsonb_build_object('kit_missing', true));
+end; $$;
+
+grant execute on function set_kit_missing(uuid, uuid) to authenticated;
+
+-- نفس confirm_match_result (من 0021) + تنصيف رسم الإعارة للاعب المعار اللي ما جاب بدلته
+create or replace function confirm_match_result(
+  p_match_id uuid, p_winner_team_id uuid
+) returns matches
+language plpgsql security definer set search_path = public as $$
+declare
+  v_match matches;
+  v_loser_team_id uuid;
+  v_team_a teams; v_team_b teams;
+  v_winner teams; v_loser teams;
+  v_winner_stake integer; v_loser_stake integer;
+  v_loan record;
+  v_kit_missing boolean;
+  v_fee_amount integer;
+  v_prediction record;
+  v_week_number integer;
+  v_rank integer;
+  v_team record;
+begin
+  if not is_admin() then raise exception 'forbidden: admin only'; end if;
+
+  select * into v_match from matches where id = p_match_id for update;
+  if not found then raise exception 'match not found'; end if;
+  if v_match.status = 'completed' then raise exception 'match already completed'; end if;
+  if v_match.status = 'cancelled' then raise exception 'match is cancelled'; end if;
+  if p_winner_team_id not in (v_match.team_a_id, v_match.team_b_id) then
+    raise exception 'winner must be one of the two participating teams';
+  end if;
+
+  v_loser_team_id := case when p_winner_team_id = v_match.team_a_id then v_match.team_b_id else v_match.team_a_id end;
+
+  select * into v_team_a from teams where id = least(v_match.team_a_id, v_match.team_b_id) for update;
+  select * into v_team_b from teams where id = greatest(v_match.team_a_id, v_match.team_b_id) for update;
+  v_winner := case when v_team_a.id = p_winner_team_id then v_team_a else v_team_b end;
+  v_loser  := case when v_team_a.id = v_loser_team_id then v_team_a else v_team_b end;
+
+  v_winner_stake := case when p_winner_team_id = v_match.team_a_id then v_match.team_a_stake else v_match.team_b_stake end;
+  v_loser_stake  := case when v_loser_team_id  = v_match.team_a_id then v_match.team_a_stake else v_match.team_b_stake end;
+
+  if v_loser_stake > v_loser.balance_wathaq then
+    raise exception 'the losing team''s own stake (%) exceeds its current balance (%)', v_loser_stake, v_loser.balance_wathaq;
+  end if;
+
+  insert into balance_ledger (team_id, delta, balance_after, reason, match_id, created_by)
+  values (v_winner.id, v_winner_stake, v_winner.balance_wathaq + v_winner_stake, 'match_result', p_match_id, auth.uid());
+  insert into balance_ledger (team_id, delta, balance_after, reason, match_id, created_by)
+  values (v_loser.id, -v_loser_stake, v_loser.balance_wathaq - v_loser_stake, 'match_result', p_match_id, auth.uid());
+
+  update teams set balance_wathaq = balance_wathaq + v_winner_stake where id = v_winner.id;
+  update teams set balance_wathaq = balance_wathaq - v_loser_stake where id = v_loser.id;
+
+  for v_loan in
+    select * from match_loans
+    where match_id = p_match_id and borrowing_team_id = p_winner_team_id and not fee_settled
+  loop
+    select coalesce(kit_missing, false) into v_kit_missing from match_lineups
+      where match_id = p_match_id and player_id = v_loan.player_id;
+    -- لاعب معار ما جاب بدلته: يُدفع نصف قيمة الانتقال بس (تقريب لأقرب عدد صحيح لأعلى)
+    v_fee_amount := case when v_kit_missing then ceil(v_loan.winning_bid_amount / 2.0)::integer else v_loan.winning_bid_amount end;
+
+    insert into balance_ledger (team_id, delta, balance_after, reason, match_id, loan_id, created_by)
+    values (v_loan.borrowing_team_id, -v_fee_amount,
+      (select balance_wathaq from teams where id = v_loan.borrowing_team_id) - v_fee_amount,
+      'loan_fee', p_match_id, v_loan.id, auth.uid());
+
+    update teams set balance_wathaq = balance_wathaq - v_fee_amount where id = v_loan.borrowing_team_id;
+
+    update match_loans set fee_settled = true where id = v_loan.id;
+  end loop;
+
+  -- توقعات صحيحة: كل كابتن توقّع الفريق الفائز ياخذ مبلغ الجائزة كامل (بلا تقسيم)
+  if v_match.prediction_enabled and v_match.prediction_reward is not null then
+    for v_prediction in
+      select * from match_predictions
+      where match_id = p_match_id and predicted_winner_team_id = p_winner_team_id
+    loop
+      insert into balance_ledger (team_id, delta, balance_after, reason, match_id, created_by)
+      values (v_prediction.predicting_team_id, v_match.prediction_reward,
+        (select balance_wathaq from teams where id = v_prediction.predicting_team_id) + v_match.prediction_reward,
+        'prediction_reward', p_match_id, auth.uid());
+
+      update teams set balance_wathaq = balance_wathaq + v_match.prediction_reward where id = v_prediction.predicting_team_id;
+    end loop;
+  end if;
+
+  update matches set
+    status = 'completed',
+    winner_team_id = p_winner_team_id,
+    team_a_balance_before = v_team_a.balance_wathaq,
+    team_b_balance_before = v_team_b.balance_wathaq,
+    team_a_balance_after = (select balance_wathaq from teams where id = v_team_a.id),
+    team_b_balance_after = (select balance_wathaq from teams where id = v_team_b.id),
+    confirmed_at = now(),
+    confirmed_by = auth.uid()
+  where id = p_match_id
+  returning * into v_match;
+
+  select week_number into v_week_number from weeks where id = v_match.week_id;
+
+  v_rank := 0;
+  for v_team in
+    select t.id, t.balance_wathaq,
+      (select count(*) from matches m where m.status='completed' and m.winner_team_id = t.id) as wins,
+      (select count(*) from matches m where m.status='completed' and m.winner_team_id <> t.id and t.id in (m.team_a_id, m.team_b_id)) as losses
+    from teams t
+    order by t.balance_wathaq desc, t.name asc
+  loop
+    v_rank := v_rank + 1;
+    insert into standings_snapshots (week_id, team_id, balance_wathaq, wins, losses, rank)
+    values (v_match.week_id, v_team.id, v_team.balance_wathaq, v_team.wins, v_team.losses, v_rank)
+    on conflict (week_id, team_id) do update
+      set balance_wathaq = excluded.balance_wathaq, wins = excluded.wins,
+          losses = excluded.losses, rank = excluded.rank;
+  end loop;
+
+  perform log_audit('confirm_match_result', 'matches', p_match_id::text,
+    jsonb_build_object('status', 'scheduled'), to_jsonb(v_match));
+
+  return v_match;
+end; $$;
+
+-- دوري وثاق: يقدر كل كابتن يحدد مركز كل لاعب من تشكيلته على ملعب حقيقي (تشكيلة
+-- ثابتة 1-2-3-1: حارس + مدافعان + ثلاثة وسط + مهاجم = 7 لاعبين، تطابق قاعدة
+-- "7 لاعبين بالملعب مع الحارس"). المراكز اختيارية — التشكيلة تشتغل بدونها عادي.
+-- =============================================================================
+
+alter table match_lineups add column position_slot text
+  check (position_slot is null or position_slot in ('GK','DF1','DF2','MF1','MF2','MF3','FW1'));
+
+create or replace function set_lineup_position(p_match_id uuid, p_player_id uuid, p_slot text)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_lineup match_lineups;
+begin
+  select * into v_lineup from match_lineups where match_id = p_match_id and player_id = p_player_id for update;
+  if not found then raise exception 'player not in this match lineup'; end if;
+  if not (is_admin() or my_team_id() = v_lineup.team_id) then
+    raise exception 'forbidden: not this team''s captain';
+  end if;
+  if p_slot is not null and p_slot not in ('GK','DF1','DF2','MF1','MF2','MF3','FW1') then
+    raise exception 'invalid slot';
+  end if;
+
+  -- لو المركز محجوز للاعب ثاني بنفس الفريق بهذي المباراة، يفضّى منه تلقائيًا (تبديل)
+  if p_slot is not null then
+    update match_lineups set position_slot = null
+      where match_id = p_match_id and team_id = v_lineup.team_id and position_slot = p_slot and player_id <> p_player_id;
+  end if;
+
+  update match_lineups set position_slot = p_slot where id = v_lineup.id;
+end; $$;
+
+grant execute on function set_lineup_position(uuid, uuid, text) to authenticated;
