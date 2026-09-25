@@ -98,12 +98,22 @@ async function renderTeamRoom(){
   const { data: team, error } = await sb.from("teams").select("*").eq("id", teamId).single();
   if(error || !team){ document.querySelector("main").innerHTML = `<div class="empty-state">الفريق غير موجود</div>`; return; }
 
+  // اسم الكابتن ما يظهر إلا لمستخدم مسجّل دخوله (RLS يمنع الزوار من قراءة profiles أصلًا،
+  // فيرجع فاضي بهدوء لهم بدون خطأ)
+  let captainName = null;
+  if(profile){
+    const { data: captainProfile } = await sb
+      .from("profiles").select("display_name").eq("team_id", teamId).eq("role", "team_captain").maybeSingle();
+    captainName = captainProfile ? captainProfile.display_name : null;
+  }
+
   document.getElementById("teamHero").innerHTML = `
     <div class="logo" style="background:${team.primary_color}">${team.logo_url
       ? `<img src="${team.logo_url}" style="width:100%;height:100%;object-fit:cover;border-radius:16px;"
           onerror="this.style.display='none';this.nextElementSibling.style.display='inline';"/><span style="display:none;">${team.name.slice(0,1)}</span>`
       : team.name.slice(0,1)}</div>
     <div style="font-weight:800;font-size:18px;">${team.name}</div>
+    ${captainName ? `<div style="font-size:12px;color:var(--text2);margin-top:2px;">الكابتن: ${captainName}</div>` : ""}
     <div class="balance">${team.balance_wathaq}<span class="coin lg">و</span></div>
   `;
 
@@ -139,16 +149,17 @@ async function renderTeamRoom(){
   const lineupSection = document.getElementById("lineupSection");
   if(upcoming && upcoming.length){
     const m = upcoming[0];
+    const isOwnerOrAdmin = profile && (profile.role === "super_admin" || profile.team_id === teamId);
     wrap.innerHTML = `
       <a href="match.html?id=${m.id}" class="card glass" style="display:flex;justify-content:space-between;align-items:center;padding:14px 16px;margin-bottom:14px;text-decoration:none;color:inherit;">
         <div>
           <div style="font-size:12px;color:var(--text2);">مباراتك القادمة · أسبوع ${m.week.week_number}</div>
           <div style="font-weight:800;font-size:14px;">${m.team_a.name} × ${m.team_b.name}</div>
         </div>
-        <span class="btn primary" style="font-size:12px;">سجّل صفقة إعارة ←</span>
+        <span class="btn primary" style="font-size:12px;">${isOwnerOrAdmin ? "سجّل صفقة إعارة ←" : "عرض المباراة ←"}</span>
       </a>
     `;
-    if(profile && (profile.role === "super_admin" || profile.team_id === teamId)){
+    if(isOwnerOrAdmin){
       lineupSection.hidden = false;
       await renderLineup(m.id);
     }else{
