@@ -59,7 +59,6 @@ begin
     raise exception 'cannot delete a player who has an existing loan claim';
   end if;
 
-  delete from auctions where player_id = p_player_id;
   delete from players where id = p_player_id;
   perform log_audit('delete_player', 'players', p_player_id::text, to_jsonb(v_player), null);
 end; $$;

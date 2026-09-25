@@ -31,11 +31,10 @@
       <div style="margin-bottom:10px;"><label class="field-label">المركز (اختياري)</label>
         <select class="field" id="p_position">
           <option value="">— بدون —</option>
-          <option value="معد">معد (Setter)</option>
-          <option value="مهاجم">مهاجم (Hitter)</option>
-          <option value="حائط">حائط (Blocker)</option>
-          <option value="ليبرو">ليبرو (Libero)</option>
-          <option value="معاكس">معاكس (Opposite)</option>
+          <option value="حارس مرمى">حارس مرمى</option>
+          <option value="مدافع">مدافع</option>
+          <option value="وسط">وسط</option>
+          <option value="مهاجم">مهاجم</option>
         </select>
       </div>
       <button class="btn primary block" type="submit">إضافة اللاعب</button>
@@ -55,7 +54,7 @@
 <script src="../js/api/players.js"></script>
 <script>
 let teamsCache = [], playersCache = [];
-const POSITIONS = ["معد", "مهاجم", "حائط", "ليبرو", "معاكس"];
+const POSITIONS = ["حارس مرمى", "مدافع", "وسط", "مهاجم"];
 
 function positionOptions(selected){
   return `<option value="">— بدون —</option>` + POSITIONS.map(p =>
