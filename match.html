@@ -72,10 +72,16 @@
   }
   .pitch-slot.editable{ cursor:pointer; }
   .pitch-slot .jersey{
-    width:30px;height:30px;border-radius:50%;background:var(--accent);border:2px solid #fff;color:#fff;
+    width:30px;height:30px;border-radius:50%;border:2px solid #fff;color:#fff;
     display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;box-shadow:0 2px 6px rgba(0,0,0,.35);
   }
-  .pitch-slot.empty .jersey{ background:rgba(255,255,255,.25);border-style:dashed; }
+  /* ألوان ثابتة لكل جهة بالملعب (مو ألوان الفريق نفسه) عشان يصير تمييز الفريقين واضح
+     دايمًا حتى لو تقاربت الدوائر قرب خط النص */
+  .pitch-slot.side-bottom .jersey{ background:#1a3a5c; }
+  .pitch-slot.side-top .jersey{ background:#dc2626; }
+  .pitch-slot.empty .jersey{ border-style:dashed; }
+  .pitch-slot.side-bottom.empty .jersey{ background:rgba(26,58,92,.35); }
+  .pitch-slot.side-top.empty .jersey{ background:rgba(220,38,38,.35); }
   .pitch-slot .pname{
     font-size:9.5px;font-weight:800;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);white-space:nowrap;
     max-width:70px;overflow:hidden;text-overflow:ellipsis;
@@ -198,12 +204,13 @@ function renderPitch(rowsA, rowsB, formationA, formationB){
 
   const slotHtml = (rows, formation, editable, mirror) => buildSlots(formation, mirror).map(f => {
     const current = rows.find(r => r.position_slot === f.slot);
+    const sideClass = mirror ? "side-top" : "side-bottom";
     if(editable){
       const options = [`<option value="">+ ${f.label}</option>`].concat(
         rows.map(r => `<option value="${r.player_id}" ${current && current.player_id === r.player_id ? "selected" : ""}>${r.players.full_name}</option>`)
       ).join("");
       return `
-        <div class="pitch-slot editable ${current ? "" : "empty"}" style="left:${f.x}%;top:${f.y}%;">
+        <div class="pitch-slot editable ${sideClass} ${current ? "" : "empty"}" style="left:${f.x}%;top:${f.y}%;">
           <div class="jersey">${current ? current.players.full_name.trim()[0] : f.label}</div>
           <select onchange="onAssignSlot(this,'${f.slot}','${current ? current.player_id : ""}')" style="font-size:9px;max-width:64px;background:rgba(255,255,255,.85);border-radius:6px;border:none;padding:1px;">
             ${options}
@@ -211,7 +218,7 @@ function renderPitch(rowsA, rowsB, formationA, formationB){
         </div>`;
     }
     return `
-      <div class="pitch-slot ${current ? "" : "empty"}" style="left:${f.x}%;top:${f.y}%;">
+      <div class="pitch-slot ${sideClass} ${current ? "" : "empty"}" style="left:${f.x}%;top:${f.y}%;">
         <div class="jersey">${current ? current.players.full_name.trim()[0] : f.label}</div>
         ${current ? `<div class="pname">${current.players.full_name}</div>` : ""}
       </div>`;
