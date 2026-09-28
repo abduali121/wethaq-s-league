@@ -120,6 +120,7 @@
 <script src="js/api/matches.js"></script>
 <script src="js/api/loans.js"></script>
 <script src="js/api/settings.js"></script>
+<script src="js/api/goals.js"></script>
 <script>
 const matchId = new URLSearchParams(window.location.search).get("id");
 let profile, match, playersById = {}, teamsById = {};
@@ -224,13 +225,16 @@ async function onAssignSlot(el, slot, previousPlayerId){
 let currentLoans = [];
 async function renderLineups(loans){
   currentLoans = loans;
-  const [playersA, playersB] = await Promise.all([
+  const [playersA, playersB, goals] = await Promise.all([
     sb.from("match_lineups").select("*, players:player_id(full_name)").eq("match_id", matchId).eq("team_id", match.team_a_id),
     sb.from("match_lineups").select("*, players:player_id(full_name)").eq("match_id", matchId).eq("team_id", match.team_b_id),
+    listMatchGoals(matchId).catch(() => []),
   ]);
   renderPitch(playersA.data || [], playersB.data || []);
 
-  const canFlagKit = profile && profile.role === "super_admin" && match.status !== "completed";
+  const isAdmin = profile && profile.role === "super_admin";
+  const canFlagKit = isAdmin && match.status !== "completed";
+  const goalCount = (playerId) => goals.filter(g => g.player_id === playerId).length;
   const col = (teamName, rows, teamId) => {
     const currentIds = new Set((rows.data || []).map(r => r.player_id));
     const listHtml = (rows.data || []).map(r => {
@@ -238,7 +242,15 @@ async function renderLineups(loans){
       const kitBtn = r.kit_missing
         ? `<span class="loan-tag" style="background:var(--red-bg);color:var(--red);">❌ بدون بدلة</span>`
         : (canFlagKit ? `<button class="btn" style="font-size:10px;padding:3px 8px;margin-inline-start:6px;" onclick="onSetKitMissing('${r.player_id}')">لم يحضر البدلة</button>` : "");
-      return `<div class="player-check" style="display:flex;align-items:center;justify-content:space-between;gap:6px;"><span>${r.players.full_name}${isLoan ? '<span class="loan-tag">مُعار</span>' : ''}</span>${kitBtn}</div>`;
+      const n = goalCount(r.player_id);
+      const goalCtl = isAdmin
+        ? `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;">
+             <button class="btn" style="padding:1px 7px;font-size:11px;" onclick="onRemoveGoal('${r.player_id}')" ${n === 0 ? "disabled" : ""}>−</button>
+             <span>⚽ ${n}</span>
+             <button class="btn" style="padding:1px 7px;font-size:11px;" onclick="onAddGoal('${r.player_id}')">+</button>
+           </span>`
+        : (n > 0 ? `<span style="font-size:11px;">⚽ ${n}</span>` : "");
+      return `<div class="player-check" style="display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;"><span>${r.players.full_name}${isLoan ? '<span class="loan-tag">مُعار</span>' : ''}</span><span style="display:flex;align-items:center;gap:6px;">${goalCtl}${kitBtn}</span></div>`;
     }).join("") || '<div class="empty-state" style="padding:10px;">لم تُحدَّد التشكيلة بعد</div>';
 
     const editHtml = canEditLineup(teamId) ? `
@@ -272,6 +284,16 @@ async function onSaveLineup(teamId){
     showToast("تم حفظ التشكيلة", "success");
     await loadAll();
   }catch(err){ showToast(err.message, "error"); }
+}
+
+async function onAddGoal(playerId){
+  try{ await addMatchGoal(matchId, playerId); await renderLineups(currentLoans); }
+  catch(err){ showToast(err.message, "error"); }
+}
+
+async function onRemoveGoal(playerId){
+  try{ await removeMatchGoal(matchId, playerId); await renderLineups(currentLoans); }
+  catch(err){ showToast(err.message, "error"); }
 }
 
 async function onSetKitMissing(playerId){
