@@ -3200,6 +3200,11 @@ grant select on top_scorers to anon, authenticated;
 -- ما يغيّر شكله (لأن معنى الخانات يتغيّر).
 -- =============================================================================
 
+-- الخانات القديمة (DF1/MF2/FW1...) من شكل التشكيلة الثابت السابق ما تطابق القيد
+-- الجديد، فنصفّرها أول — الكباتن يعيدون تحديد مراكزهم بالشكل الجديد بعدين بضغطة
+update match_lineups set position_slot = null
+  where position_slot is not null and position_slot <> 'GK' and position_slot !~ '^L[0-2]-[0-2]$';
+
 alter table match_lineups drop constraint if exists match_lineups_position_slot_check;
 alter table match_lineups add constraint match_lineups_position_slot_check
   check (position_slot is null or position_slot = 'GK' or position_slot ~ '^L[0-2]-[0-2]$');
