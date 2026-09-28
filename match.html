@@ -163,29 +163,47 @@ function eligiblePlayersForTeam(teamId, loans){
   return [...own, ...loanedIn];
 }
 
-const FORMATION_SLOTS = [
-  { slot: "GK",  label: "ح", x: 50, y: 90 },
-  { slot: "DF1", label: "ظ", x: 28, y: 74 },
-  { slot: "DF2", label: "ظ", x: 72, y: 74 },
-  { slot: "MF1", label: "و", x: 18, y: 56 },
-  { slot: "MF2", label: "و", x: 50, y: 56 },
-  { slot: "MF3", label: "و", x: 82, y: 56 },
-  { slot: "FW1", label: "م", x: 50, y: 37 },
-];
+// كل شكل: عدد اللاعبين بكل خط برا الحارس، من الدفاع للهجوم — مجموعهم دايمًا 6
+const FORMATIONS = { "3-3": [3, 3], "3-2-1": [3, 2, 1], "2-3-1": [2, 3, 1], "3-1-2": [3, 1, 2] };
+const X_BY_COUNT = { 1: [50], 2: [32, 68], 3: [18, 50, 82] };
 
-function renderPitch(rowsA, rowsB){
+function lineLabel(lineIndex, totalLines){
+  if(lineIndex === 0) return "ظ";
+  if(lineIndex === totalLines - 1) return "م";
+  return "و";
+}
+
+// يبني خانات فريق واحد جوّا نصه بالضبط (بدون ما يتخطى خط النص) — الحارس قرب مرماه،
+// وكل خط بعده أقرب لخط النص تدريجيًا، آخر خط (الهجوم) أقرب نقطة لخط النص بدون تجاوزه
+function buildSlots(formation, mirror){
+  const lines = FORMATIONS[formation] || FORMATIONS["2-3-1"];
+  const yGoal = 94, yHalf = 54; // مدى فريق "أ" (غير المعكوس) — 50 بالضبط هو خط النص
+  const steps = lines.length; // GK + lines.length نقطة، يعني (steps) فجوات
+  const yAt = (i) => yGoal - i * ((yGoal - yHalf) / steps); // i=0 حارس … i=steps آخر خط
+  const mirrorY = (y) => mirror ? 100 - y : y;
+
+  const slots = [{ slot: "GK", label: "ح", x: 50, y: mirrorY(yAt(0)) }];
+  lines.forEach((count, li) => {
+    const y = mirrorY(yAt(li + 1));
+    (X_BY_COUNT[count] || [50]).forEach((x, pi) => {
+      slots.push({ slot: `L${li}-${pi}`, label: lineLabel(li, lines.length), x, y });
+    });
+  });
+  return slots;
+}
+
+function renderPitch(rowsA, rowsB, formationA, formationB){
   const canEditA = canEditLineup(match.team_a_id);
   const canEditB = canEditLineup(match.team_b_id);
 
-  const slotHtml = (rows, teamId, editable, mirror) => FORMATION_SLOTS.map(f => {
-    const y = mirror ? 100 - f.y : f.y;
+  const slotHtml = (rows, formation, editable, mirror) => buildSlots(formation, mirror).map(f => {
     const current = rows.find(r => r.position_slot === f.slot);
     if(editable){
       const options = [`<option value="">+ ${f.label}</option>`].concat(
         rows.map(r => `<option value="${r.player_id}" ${current && current.player_id === r.player_id ? "selected" : ""}>${r.players.full_name}</option>`)
       ).join("");
       return `
-        <div class="pitch-slot editable ${current ? "" : "empty"}" style="left:${f.x}%;top:${y}%;">
+        <div class="pitch-slot editable ${current ? "" : "empty"}" style="left:${f.x}%;top:${f.y}%;">
           <div class="jersey">${current ? current.players.full_name.trim()[0] : f.label}</div>
           <select onchange="onAssignSlot(this,'${f.slot}','${current ? current.player_id : ""}')" style="font-size:9px;max-width:64px;background:rgba(255,255,255,.85);border-radius:6px;border:none;padding:1px;">
             ${options}
@@ -193,22 +211,35 @@ function renderPitch(rowsA, rowsB){
         </div>`;
     }
     return `
-      <div class="pitch-slot ${current ? "" : "empty"}" style="left:${f.x}%;top:${y}%;">
+      <div class="pitch-slot ${current ? "" : "empty"}" style="left:${f.x}%;top:${f.y}%;">
         <div class="jersey">${current ? current.players.full_name.trim()[0] : f.label}</div>
         ${current ? `<div class="pname">${current.players.full_name}</div>` : ""}
       </div>`;
   }).join("");
 
+  const formationPicker = (teamId, current, editable) => editable ? `
+    <select onchange="onChangeFormation('${teamId}', this.value)" style="font-size:10px;padding:2px 6px;border-radius:6px;border:none;">
+      ${Object.keys(FORMATIONS).map(f => `<option value="${f}" ${f === current ? "selected" : ""}>${f}</option>`).join("")}
+    </select>` : `<span class="pitch-team-label" style="position:static;">${current}</span>`;
+
   document.getElementById("pitchWrap").innerHTML = `
     <div class="pitch">
       <div class="pitch-goal top"></div>
       <div class="pitch-goal bottom"></div>
-      <div class="pitch-team-label" style="top:6px;right:6px;">${match.team_b.name}</div>
-      <div class="pitch-team-label" style="bottom:6px;right:6px;">${match.team_a.name}</div>
-      ${slotHtml(rowsB, match.team_b_id, canEditB, true)}
-      ${slotHtml(rowsA, match.team_a_id, canEditA, false)}
+      <div class="pitch-team-label" style="top:6px;right:6px;display:flex;align-items:center;gap:6px;">${match.team_b.name} ${formationPicker(match.team_b_id, formationB, canEditB)}</div>
+      <div class="pitch-team-label" style="bottom:6px;right:6px;display:flex;align-items:center;gap:6px;">${match.team_a.name} ${formationPicker(match.team_a_id, formationA, canEditA)}</div>
+      ${slotHtml(rowsB, formationB, canEditB, true)}
+      ${slotHtml(rowsA, formationA, canEditA, false)}
     </div>
   `;
+}
+
+async function onChangeFormation(teamId, formation){
+  try{
+    await setMatchFormation(matchId, teamId, formation);
+    showToast("تم تغيير شكل التشكيلة", "success");
+    await renderLineups(currentLoans);
+  }catch(err){ showToast(err.message, "error"); await renderLineups(currentLoans); }
 }
 
 async function onAssignSlot(el, slot, previousPlayerId){
@@ -225,12 +256,14 @@ async function onAssignSlot(el, slot, previousPlayerId){
 let currentLoans = [];
 async function renderLineups(loans){
   currentLoans = loans;
-  const [playersA, playersB, goals] = await Promise.all([
+  const [playersA, playersB, goals, formations] = await Promise.all([
     sb.from("match_lineups").select("*, players:player_id(full_name)").eq("match_id", matchId).eq("team_id", match.team_a_id),
     sb.from("match_lineups").select("*, players:player_id(full_name)").eq("match_id", matchId).eq("team_id", match.team_b_id),
     listMatchGoals(matchId).catch(() => []),
+    listMatchFormations(matchId).catch(() => []),
   ]);
-  renderPitch(playersA.data || [], playersB.data || []);
+  const formationOf = (teamId) => (formations.find(f => f.team_id === teamId) || {}).formation || "2-3-1";
+  renderPitch(playersA.data || [], playersB.data || [], formationOf(match.team_a_id), formationOf(match.team_b_id));
 
   const isAdmin = profile && profile.role === "super_admin";
   const canFlagKit = isAdmin && match.status !== "completed";

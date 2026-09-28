@@ -104,6 +104,20 @@ async function setLineup(matchId, teamId, playerIds){
   return data;
 }
 
+async function listMatchFormations(matchId){
+  const { data, error } = await sb.from("match_lineup_formations").select("*").eq("match_id", matchId);
+  if(error) throw error;
+  return data;
+}
+
+async function setMatchFormation(matchId, teamId, formation){
+  const { data, error } = await sb.rpc("set_match_formation", {
+    p_match_id: matchId, p_team_id: teamId, p_formation: formation,
+  });
+  if(error) throw error;
+  return data;
+}
+
 async function setLineupPosition(matchId, playerId, slot){
   const { data, error } = await sb.rpc("set_lineup_position", {
     p_match_id: matchId, p_player_id: playerId, p_slot: slot,
