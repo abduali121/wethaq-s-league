@@ -406,10 +406,11 @@ async function renderMatches(){
 
   let toShow = upcoming;
   if(!toShow.length){
-    const completed = all
-      .filter(m => m.status === "completed")
-      .sort((a, b) => (b.week?.week_number || 0) - (a.week?.week_number || 0));
-    toShow = completed.slice(0, 1);
+    const completed = all.filter(m => m.status === "completed");
+    const lastWeek = completed.reduce((max, m) => Math.max(max, m.week?.week_number || 0), 0);
+    toShow = completed
+      .filter(m => (m.week?.week_number || 0) === lastWeek)
+      .sort((a, b) => (a.created_at || "").localeCompare(b.created_at || ""));
   }
 
   document.getElementById("matchesTitle").innerHTML = upcoming.length
