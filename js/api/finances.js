@@ -20,6 +20,13 @@ async function listTeamLedgerEvents(){
   return data;
 }
 
+// يربط كل مباراة برقم أسبوعها، عشان نقدر نفلتر جدول كل فريق بأسبوع محدد
+async function listMatchWeeks(){
+  const { data, error } = await sb.from("matches").select("id, week:week_id(week_number)");
+  if(error) throw error;
+  return data;
+}
+
 async function listKitMissingWithContext(matchIds){
   if(!matchIds.length) return [];
   const { data, error } = await sb

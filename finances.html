@@ -38,6 +38,13 @@
   .fin-row .delta.neg{ color:var(--red); }
   .fin-row .bal{ font-weight:800;text-align:center; }
   .fin-empty{ padding:14px 16px;text-align:center;font-size:11.5px;color:var(--text2); }
+
+  .week-filters{ display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:16px; }
+  .week-chip{
+    flex-shrink:0;padding:7px 14px;border-radius:999px;font-size:11.5px;font-weight:700;
+    border:1px solid var(--border);background:var(--surface);color:var(--text2);cursor:pointer;white-space:nowrap;
+  }
+  .week-chip.active{ background:var(--accent);color:#fff;border-color:var(--accent); }
 </style>
 </head>
 <body>
@@ -47,6 +54,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 9.5c0-1.4 1.3-2.5 3-2.5s3 1 3 2.2c0 2.8-6 1.3-6 4.1 0 1.2 1.3 2.2 3 2.2s3-1.1 3-2.5"/></svg>
     الأمور المالية
   </div>
+  <div id="weekFilters" class="week-filters"></div>
   <div id="teamsWrap"><div class="fin-empty">جارٍ التحميل...</div></div>
 </main>
 
@@ -91,40 +99,36 @@ function describeRow(r, teamName){
   return r.reason;
 }
 
-async function renderFinances(){
-  const [teams, ledger] = await Promise.all([listTeams(), listTeamLedgerEvents()]);
+let allTeams = [], allLedger = [], matchWeekById = new Map();
+let activeWeek = null; // null = كل الأسابيع
 
-  const matchIds = [...new Set(ledger.map(r => r.match_id).filter(Boolean))];
-  const kitRows = await listKitMissingWithContext(matchIds);
-  // مفتاح "مباراة:لاعب" لمعرفة هل هذا اللاعب بالذات ما جاب بدلته بهذي المباراة تحديدًا
-  const kitMissingKeys = new Set(kitRows.map(k => `${k.match_id}:${k.player.id}`));
-  // أسماء اللاعبين الأصليين (غير المعارين) اللي ما جابوا بدلهم، بالترتيب — تُسحب بالتتابع
-  // على صفوف kit_penalty لنفس (المباراة، الفريق) لأنه ما فيه ربط مباشر بلاعب معيّن بالسجل
-  const ownKitMissingByMatchTeam = new Map();
-  for(const k of kitRows){
-    if(k.player.original_team_id !== k.team_id) continue;
-    const key = `${k.match_id}:${k.team_id}`;
-    if(!ownKitMissingByMatchTeam.has(key)) ownKitMissingByMatchTeam.set(key, []);
-    ownKitMissingByMatchTeam.get(key).push(k.player.full_name);
-  }
+function renderWeekFilters(){
+  const weeks = [...new Set(allLedger.map(r => matchWeekById.get(r.match_id)).filter(Boolean))].sort((a, b) => a - b);
+  document.getElementById("weekFilters").innerHTML = [
+    ...weeks.map(w => `<div class="week-chip ${activeWeek === w ? 'active' : ''}" onclick="onFilterWeek(${w})">الأسبوع ${w}</div>`),
+    `<div class="week-chip ${activeWeek === null ? 'active' : ''}" onclick="onFilterWeek(null)">كل الأسابيع</div>`,
+  ].join("");
+}
 
-  for(const r of ledger){
-    if(r.loan) r._kitMissing = kitMissingKeys.has(`${r.match_id}:${r.loan.player_id}`);
-    if(r.reason === "kit_penalty"){
-      const key = `${r.match_id}:${r.team_id}`;
-      const names = ownKitMissingByMatchTeam.get(key) || [];
-      r._kitPlayerName = names.shift();
-    }
-  }
+function onFilterWeek(week){
+  activeWeek = week;
+  renderWeekFilters();
+  renderTeamCards();
+}
 
-  const byTeam = new Map(teams.map(t => [t.id, { main: [], credits: [] }]));
+function renderTeamCards(){
+  const ledger = activeWeek === null
+    ? allLedger
+    : allLedger.filter(r => matchWeekById.get(r.match_id) === activeWeek);
+
+  const byTeam = new Map(allTeams.map(t => [t.id, { main: [], credits: [] }]));
   for(const r of ledger){
     if(!byTeam.has(r.team_id)) continue;
     const bucket = r.reason === "loan_fee_credit" ? "credits" : "main";
     byTeam.get(r.team_id)[bucket].push(r);
   }
 
-  document.getElementById("teamsWrap").innerHTML = teams.map(t => {
+  document.getElementById("teamsWrap").innerHTML = allTeams.map(t => {
     const { main, credits } = byTeam.get(t.id);
     const mainHtml = main.length
       ? headRowHtml() + main.map(r => rowHtml(describeRow(r, t.name), r.delta, r.balance_after)).join("")
@@ -149,15 +153,52 @@ async function renderFinances(){
   }).join("");
 }
 
+async function loadFinances(){
+  const [teams, ledger, matches] = await Promise.all([listTeams(), listTeamLedgerEvents(), listMatchWeeks()]);
+  allTeams = teams;
+  allLedger = ledger;
+  matchWeekById = new Map(matches.map(m => [m.id, m.week?.week_number || null]));
+
+  const matchIds = [...new Set(ledger.map(r => r.match_id).filter(Boolean))];
+  const kitRows = await listKitMissingWithContext(matchIds);
+  // مفتاح "مباراة:لاعب" لمعرفة هل هذا اللاعب بالذات ما جاب بدلته بهذي المباراة تحديدًا
+  const kitMissingKeys = new Set(kitRows.map(k => `${k.match_id}:${k.player.id}`));
+  // أسماء اللاعبين الأصليين (غير المعارين) اللي ما جابوا بدلهم، بالترتيب — تُسحب بالتتابع
+  // على صفوف kit_penalty لنفس (المباراة، الفريق) لأنه ما فيه ربط مباشر بلاعب معيّن بالسجل
+  const ownKitMissingByMatchTeam = new Map();
+  for(const k of kitRows){
+    if(k.player.original_team_id !== k.team_id) continue;
+    const key = `${k.match_id}:${k.team_id}`;
+    if(!ownKitMissingByMatchTeam.has(key)) ownKitMissingByMatchTeam.set(key, []);
+    ownKitMissingByMatchTeam.get(key).push(k.player.full_name);
+  }
+
+  for(const r of allLedger){
+    if(r.loan) r._kitMissing = kitMissingKeys.has(`${r.match_id}:${r.loan.player_id}`);
+    if(r.reason === "kit_penalty"){
+      const key = `${r.match_id}:${r.team_id}`;
+      const names = ownKitMissingByMatchTeam.get(key) || [];
+      r._kitPlayerName = names.shift();
+    }
+  }
+
+  // افتراضيًا نعرض آخر أسبوع فيه أحداث، عشان الصفحة تبقى مرتّبة كل ما تزيد الأسابيع
+  const weeksWithEvents = [...new Set(allLedger.map(r => matchWeekById.get(r.match_id)).filter(Boolean))];
+  activeWeek = weeksWithEvents.length ? Math.max(...weeksWithEvents) : null;
+
+  renderWeekFilters();
+  renderTeamCards();
+}
+
 (async function(){
   const profile = await requireAuth();
   if(!profile) return;
   renderHeader(profile, "finances");
-  await renderFinances();
+  await loadFinances();
 
   sb.channel("finances-live")
-    .on("postgres_changes", { event: "*", schema: "public", table: "balance_ledger" }, renderFinances)
-    .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, renderFinances)
+    .on("postgres_changes", { event: "*", schema: "public", table: "balance_ledger" }, loadFinances)
+    .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, loadFinances)
     .subscribe();
 })();
 </script>
