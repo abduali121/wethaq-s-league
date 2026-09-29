@@ -12,33 +12,32 @@
   }
   .sec-title svg{ width:13px;height:13px;color:var(--gold-deep);flex-shrink:0; }
 
-  .team-filters{ display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:16px; }
-  .team-chip{
-    flex-shrink:0;display:flex;align-items:center;gap:6px;padding:7px 12px;border-radius:999px;
-    font-size:11.5px;font-weight:700;border:1px solid var(--border);background:var(--surface);color:var(--text2);cursor:pointer;
+  .fin-team-card{ margin-bottom:18px;overflow:hidden; }
+  .fin-team-head{
+    display:flex;align-items:center;justify-content:space-between;padding:14px 16px;
+    border-bottom:1px solid var(--border);
   }
-  .team-chip .dot{ width:9px;height:9px;border-radius:50%;flex-shrink:0; }
-  .team-chip.active{ background:var(--accent);color:#fff;border-color:var(--accent); }
+  .fin-team-head .name{ font-weight:800;font-size:14px;display:flex;align-items:center;gap:8px; }
+  .fin-team-head .badge{ width:26px;height:26px;border-radius:8px;flex-shrink:0; }
+  .fin-team-head .balance{ font-weight:800;font-size:16px;color:var(--accent); }
+  [data-theme="dark"] .fin-team-head .balance{ color:var(--gold); }
 
-  .m-card{ margin-bottom:14px;overflow:hidden; }
-  .m-head{
-    display:flex;align-items:center;justify-content:space-between;padding:12px 14px;
-    border-bottom:1px solid var(--border);font-size:11.5px;color:var(--text2);font-weight:700;
+  .fin-subhead{
+    font-size:11px;font-weight:800;color:var(--text2);padding:9px 16px;background:var(--surface2);
+    border-bottom:1px solid var(--border);
   }
-  .m-body{ padding:12px 14px;display:flex;flex-direction:column;gap:8px; }
-  .m-event{ font-size:12.5px;font-weight:600;line-height:1.6;display:flex;gap:6px; }
-  .m-event .amt{ font-weight:800;flex-shrink:0; }
-  .m-event .amt.pos{ color:var(--green); }
-  .m-event .amt.neg{ color:var(--red); }
-  .m-final{
-    display:flex;justify-content:space-between;align-items:center;gap:10px;
-    padding:12px 14px;border-top:1px solid var(--border);background:var(--surface2);
+  .fin-row{
+    display:grid;grid-template-columns:1fr 62px 68px;gap:6px;align-items:center;
+    padding:9px 16px;border-bottom:1px solid var(--border);font-size:12px;
   }
-  .m-final .team{ display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700; }
-  .m-final .team .dot{ width:9px;height:9px;border-radius:50%;flex-shrink:0; }
-  .m-final .bal{ font-size:19px;font-weight:800;color:var(--accent); }
-  [data-theme="dark"] .m-final .bal{ color:var(--gold); }
-  .fin-empty{ padding:16px;text-align:center;font-size:12px;color:var(--text2); }
+  .fin-row:last-child{ border-bottom:none; }
+  .fin-row.head{ font-size:10px;font-weight:800;color:var(--text2);background:var(--surface2); }
+  .fin-row .desc{ font-weight:600;line-height:1.5; }
+  .fin-row .delta{ font-weight:800;text-align:center; }
+  .fin-row .delta.pos{ color:var(--green); }
+  .fin-row .delta.neg{ color:var(--red); }
+  .fin-row .bal{ font-weight:800;text-align:center; }
+  .fin-empty{ padding:14px 16px;text-align:center;font-size:11.5px;color:var(--text2); }
 </style>
 </head>
 <body>
@@ -48,8 +47,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 9.5c0-1.4 1.3-2.5 3-2.5s3 1 3 2.2c0 2.8-6 1.3-6 4.1 0 1.2 1.3 2.2 3 2.2s3-1.1 3-2.5"/></svg>
     الأمور المالية
   </div>
-  <div id="teamFilters" class="team-filters"></div>
-  <div id="matchesWrap"><div class="fin-empty">جارٍ التحميل...</div></div>
+  <div id="teamsWrap"><div class="fin-empty">جارٍ التحميل...</div></div>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -59,121 +57,96 @@
 <script src="js/api/teams.js"></script>
 <script src="js/api/finances.js"></script>
 <script>
-let allMatches = [], allTeams = [], loansByMatch = new Map(), kitByMatch = new Map();
-let activeTeamId = null;
-
-function buildMatchEvents(m){
-  const events = [];
-  const winner = m.winner_team_id === m.team_a.id ? m.team_a : m.team_b;
-  const loser  = m.winner_team_id === m.team_a.id ? m.team_b : m.team_a;
-  const winnerStake = m.winner_team_id === m.team_a.id ? m.team_a_stake : m.team_b_stake;
-  const loserStake  = m.winner_team_id === m.team_a.id ? m.team_b_stake : m.team_a_stake;
-  events.push({
-    icon: "🏆",
-    html: `فاز <b>${winner.name}</b> على ${loser.name}`,
-    amt: `+${winnerStake} / -${loserStake}`,
-  });
-
-  const kitRows = kitByMatch.get(m.id) || [];
-  const loanedKitMissingPlayerIds = new Set(
-    kitRows.filter(k => k.player.original_team_id !== k.team_id).map(k => k.player.id)
-  );
-
-  for(const loan of (loansByMatch.get(m.id) || [])){
-    const kitMissing = loanedKitMissingPlayerIds.has(loan.player.id);
-    const fee = loan.fee_settled ? (kitMissing ? Math.ceil(loan.winning_bid_amount / 2) : loan.winning_bid_amount) : 0;
-    events.push({
-      icon: "🔄",
-      html: `<b>${loan.borrowing_team.name}</b> تعاقد مع "${loan.player.full_name}" من ${loan.original_team.name}${kitMissing ? " (بدون بدلة — رسم منصّف)" : ""}${!loan.fee_settled ? " — لم يُدفع (الفريق المستعير خسر)" : ""}`,
-      amt: fee ? `-${fee}` : null,
-    });
-  }
-
-  for(const k of kitRows){
-    if(k.player.original_team_id === k.team_id){
-      const team = k.team_id === m.team_a.id ? m.team_a : m.team_b;
-      events.push({ icon: "🎽", html: `"${k.player.full_name}" بدون بدلة — ${team.name}`, amt: "-40" });
-    }
-  }
-
-  return events;
-}
-
-function matchCard(m){
-  const events = buildMatchEvents(m);
+function rowHtml(desc, delta, bal){
   return `
-    <div class="card glass m-card">
-      <div class="m-head">
-        <span>الأسبوع ${m.week?.week_number ?? "?"}</span>
-        <span>${m.team_a.name} × ${m.team_b.name}</span>
-      </div>
-      <div class="m-body">
-        ${events.map(e => `
-          <div class="m-event">
-            <span>${e.icon}</span>
-            <span style="flex:1;">${e.html}</span>
-            ${e.amt ? `<span class="amt ${e.amt.startsWith('-') ? 'neg' : 'pos'}">${e.amt}</span>` : ""}
-          </div>
-        `).join("")}
-      </div>
-      <div class="m-final">
-        <div class="team"><span class="dot" style="background:${m.team_a.primary_color || '#0f2a4a'};"></span>${m.team_a.name}</div>
-        <div class="bal">${m.team_a_balance_after}</div>
-      </div>
-      <div class="m-final">
-        <div class="team"><span class="dot" style="background:${m.team_b.primary_color || '#0f2a4a'};"></span>${m.team_b.name}</div>
-        <div class="bal">${m.team_b_balance_after}</div>
-      </div>
+    <div class="fin-row">
+      <div class="desc">${desc}</div>
+      <div class="delta ${delta >= 0 ? 'pos' : 'neg'}">${delta >= 0 ? '+' : ''}${delta}</div>
+      <div class="bal">${bal}</div>
     </div>
   `;
 }
 
-function renderMatchesList(){
-  const filtered = activeTeamId
-    ? allMatches.filter(m => m.team_a.id === activeTeamId || m.team_b.id === activeTeamId)
-    : allMatches;
-  document.getElementById("matchesWrap").innerHTML = filtered.length
-    ? filtered.map(matchCard).join("")
-    : `<div class="fin-empty">لا توجد مباريات مكتملة بعد</div>`;
+function headRowHtml(){
+  return `
+    <div class="fin-row head">
+      <div>الحدث</div><div>التغيير</div><div>الرصيد</div>
+    </div>
+  `;
 }
 
-function renderTeamFilters(){
-  document.getElementById("teamFilters").innerHTML = [
-    `<div class="team-chip ${activeTeamId === null ? 'active' : ''}" onclick="onFilterTeam(null)">الكل</div>`,
-    ...allTeams.map(t => `
-      <div class="team-chip ${activeTeamId === t.id ? 'active' : ''}" onclick="onFilterTeam('${t.id}')">
-        <span class="dot" style="background:${t.primary_color || '#0f2a4a'};"></span>${t.name}
-      </div>
-    `),
-  ].join("");
+// يبني نص وصف كل حركة بلغة عادية، مع اسم اللاعب ولو ما جاب بدلته، بدل اسم السبب التقني
+function describeRow(r, teamName){
+  if(r.reason === "match_result") return r.delta >= 0 ? `فاز ${teamName}` : `خسر ${teamName}`;
+  if(r.reason === "kit_penalty") return `"${r._kitPlayerName || 'لاعب'}" بدون بدلة`;
+  if(r.reason === "loan_fee"){
+    const player = r.loan?.player?.full_name || "لاعب مستعار";
+    return `استعارة "${player}"${r._kitMissing ? " (لم يحضر بدلته)" : ""}`;
+  }
+  if(r.reason === "loan_fee_credit"){
+    const player = r.loan?.player?.full_name || "لاعب";
+    const borrower = r.loan?.borrowing_team?.name || "فريق آخر";
+    return `فريق ${borrower} استعار "${player}"${r._kitMissing ? " (لم يحضر بدلته)" : ""}`;
+  }
+  return r.reason;
 }
 
 async function renderFinances(){
-  const [teams, matches] = await Promise.all([listTeams(), listFinancialMatches()]);
-  allTeams = teams;
-  allMatches = matches;
-  const matchIds = matches.map(m => m.id);
-  const [loans, kits] = await Promise.all([listMatchLoansWithContext(matchIds), listKitMissingWithContext(matchIds)]);
+  const [teams, ledger] = await Promise.all([listTeams(), listTeamLedgerEvents()]);
 
-  loansByMatch = new Map();
-  for(const l of loans){
-    if(!loansByMatch.has(l.match_id)) loansByMatch.set(l.match_id, []);
-    loansByMatch.get(l.match_id).push(l);
+  const matchIds = [...new Set(ledger.map(r => r.match_id).filter(Boolean))];
+  const kitRows = await listKitMissingWithContext(matchIds);
+  // مفتاح "مباراة:لاعب" لمعرفة هل هذا اللاعب بالذات ما جاب بدلته بهذي المباراة تحديدًا
+  const kitMissingKeys = new Set(kitRows.map(k => `${k.match_id}:${k.player.id}`));
+  // أسماء اللاعبين الأصليين (غير المعارين) اللي ما جابوا بدلهم، بالترتيب — تُسحب بالتتابع
+  // على صفوف kit_penalty لنفس (المباراة، الفريق) لأنه ما فيه ربط مباشر بلاعب معيّن بالسجل
+  const ownKitMissingByMatchTeam = new Map();
+  for(const k of kitRows){
+    if(k.player.original_team_id !== k.team_id) continue;
+    const key = `${k.match_id}:${k.team_id}`;
+    if(!ownKitMissingByMatchTeam.has(key)) ownKitMissingByMatchTeam.set(key, []);
+    ownKitMissingByMatchTeam.get(key).push(k.player.full_name);
   }
-  kitByMatch = new Map();
-  for(const k of kits){
-    if(!kitByMatch.has(k.match_id)) kitByMatch.set(k.match_id, []);
-    kitByMatch.get(k.match_id).push(k);
+
+  for(const r of ledger){
+    if(r.loan) r._kitMissing = kitMissingKeys.has(`${r.match_id}:${r.loan.player_id}`);
+    if(r.reason === "kit_penalty"){
+      const key = `${r.match_id}:${r.team_id}`;
+      const names = ownKitMissingByMatchTeam.get(key) || [];
+      r._kitPlayerName = names.shift();
+    }
   }
 
-  renderTeamFilters();
-  renderMatchesList();
-}
+  const byTeam = new Map(teams.map(t => [t.id, { main: [], credits: [] }]));
+  for(const r of ledger){
+    if(!byTeam.has(r.team_id)) continue;
+    const bucket = r.reason === "loan_fee_credit" ? "credits" : "main";
+    byTeam.get(r.team_id)[bucket].push(r);
+  }
 
-function onFilterTeam(teamId){
-  activeTeamId = teamId;
-  renderTeamFilters();
-  renderMatchesList();
+  document.getElementById("teamsWrap").innerHTML = teams.map(t => {
+    const { main, credits } = byTeam.get(t.id);
+    const mainHtml = main.length
+      ? headRowHtml() + main.map(r => rowHtml(describeRow(r, t.name), r.delta, r.balance_after)).join("")
+      : `<div class="fin-empty">لا توجد أحداث بعد</div>`;
+    const creditsHtml = credits.length
+      ? `<div class="fin-subhead">مكافآت الاستعارة</div>` + headRowHtml() + credits.map(r => rowHtml(describeRow(r, t.name), r.delta, r.balance_after)).join("")
+      : "";
+
+    return `
+      <div class="card glass fin-team-card">
+        <div class="fin-team-head">
+          <span class="name">
+            <span class="badge" style="background:${t.primary_color || '#0f2a4a'};"></span>
+            ${t.name}
+          </span>
+          <span class="balance">${t.balance_wathaq}</span>
+        </div>
+        ${mainHtml}
+        ${creditsHtml}
+      </div>
+    `;
+  }).join("");
 }
 
 (async function(){
@@ -183,9 +156,8 @@ function onFilterTeam(teamId){
   await renderFinances();
 
   sb.channel("finances-live")
-    .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, renderFinances)
-    .on("postgres_changes", { event: "*", schema: "public", table: "match_loans" }, renderFinances)
-    .on("postgres_changes", { event: "*", schema: "public", table: "match_lineups" }, renderFinances)
+    .on("postgres_changes", { event: "*", schema: "public", table: "balance_ledger" }, renderFinances)
+    .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, renderFinances)
     .subscribe();
 })();
 </script>

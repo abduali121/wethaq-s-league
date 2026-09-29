@@ -1,34 +1,21 @@
-// أحداث الجولة المالية — تُبنى مباشرة من مصادرها الحقيقية (نتيجة المباراة،
-// صفقات الإعارة، خصم البدلة) بدل سجل balance_ledger الخام اللي فيه ضجيج تقني
-// (تصحيحات/عكس حركات بعد الإلغاء) ما يهم أحد غير الإدارة.
+// أحداث الجولة المالية لكل فريق — نبني الجدول من balance_ledger (لأن عمود
+// balance_after فيه الرصيد التراكمي الصحيح جاهز)، لكن نقرأ بس أسباب اقتصاد
+// المباراة الحقيقية (نتيجة، رسم إعارة مدفوع/مستلم، خصم بدلة) ونتجاهل كليًا
+// أي تصحيح/عكس إداري داخلي ما له علاقة بأحداث الجولة الفعلية.
+const FINANCE_REASONS = ["match_result", "loan_fee", "loan_fee_credit", "kit_penalty"];
 
-async function listFinancialMatches(){
+async function listTeamLedgerEvents(){
   const { data, error } = await sb
-    .from("matches")
+    .from("balance_ledger")
     .select(`
-      id, team_a_stake, team_b_stake, winner_team_id, confirmed_at,
-      team_a_balance_after, team_b_balance_after,
-      week:week_id(week_number),
-      team_a:team_a_id(id,name,primary_color),
-      team_b:team_b_id(id,name,primary_color)
+      id, team_id, delta, balance_after, reason, match_id, created_at,
+      loan:loan_id( player_id, original_team_id, borrowing_team_id,
+        player:player_id(id, full_name),
+        original_team:original_team_id(id, name),
+        borrowing_team:borrowing_team_id(id, name) )
     `)
-    .eq("status", "completed")
-    .order("confirmed_at", { ascending: false });
-  if(error) throw error;
-  return data;
-}
-
-async function listMatchLoansWithContext(matchIds){
-  if(!matchIds.length) return [];
-  const { data, error } = await sb
-    .from("match_loans")
-    .select(`
-      match_id, winning_bid_amount, fee_settled,
-      player:player_id(id, full_name),
-      original_team:original_team_id(id, name),
-      borrowing_team:borrowing_team_id(id, name)
-    `)
-    .in("match_id", matchIds);
+    .in("reason", FINANCE_REASONS)
+    .order("created_at", { ascending: true });
   if(error) throw error;
   return data;
 }
