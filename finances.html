@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>الأمور المالية - دوري وثاق</title>
+<link rel="stylesheet" href="assets/css/theme.css"/>
+<link rel="stylesheet" href="assets/css/components.css"/>
+<style>
+  .sec-title{
+    font-size:12px;font-weight:800;color:var(--text2);margin:0 0 10px;display:flex;align-items:center;gap:6px;
+  }
+  .sec-title svg{ width:13px;height:13px;color:var(--gold-deep);flex-shrink:0; }
+  .page-intro{ font-size:12px;color:var(--text2);margin:0 0 16px;line-height:1.7; }
+  .fin-team-card{ margin-bottom:18px;overflow:hidden; }
+  .fin-team-head{
+    display:flex;align-items:center;justify-content:space-between;padding:14px 16px;
+    border-bottom:1px solid var(--border);
+  }
+  .fin-team-head .name{ font-weight:800;font-size:14px;display:flex;align-items:center;gap:8px; }
+  .fin-team-head .badge{ width:26px;height:26px;border-radius:8px;flex-shrink:0; }
+  .fin-team-head .balance{ font-weight:800;font-size:15px;color:var(--accent); }
+  [data-theme="dark"] .fin-team-head .balance{ color:var(--gold); }
+  .fin-row{
+    display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:11px 16px;border-bottom:1px solid var(--border);
+  }
+  .fin-row:last-child{ border-bottom:none; }
+  .fin-row .desc{ font-size:12.5px;font-weight:600;line-height:1.6; }
+  .fin-row .when{ font-size:10.5px;color:var(--text2);margin-top:2px; }
+  .fin-row .delta{ font-size:13px;font-weight:800;flex-shrink:0;white-space:nowrap; }
+  .fin-row .delta.pos{ color:var(--green); }
+  .fin-row .delta.neg{ color:var(--red); }
+  .fin-empty{ padding:16px;text-align:center;font-size:12px;color:var(--text2); }
+</style>
+</head>
+<body>
+<header id="appHeader"></header>
+<main class="container">
+  <div class="sec-title">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M9 9.5c0-1.4 1.3-2.5 3-2.5s3 1 3 2.2c0 2.8-6 1.3-6 4.1 0 1.2 1.3 2.2 3 2.2s3-1.1 3-2.5"/></svg>
+    الأمور المالية خلال الجولة
+  </div>
+  <p class="page-intro">كل حركة مالية صارت لكل فريق منذ بداية الدوري، بترتيب زمني وبلغة واضحة — بعيدًا عن صفحة الفريق حتى تبقى مرتّبة.</p>
+  <div id="financesWrap"><div class="fin-empty">جارٍ التحميل...</div></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="js/supabaseClient.js"></script><script src="js/auth.js"></script>
+<script src="js/ui/theme.js"></script>
+<script src="js/ui/dates.js"></script>
+<script src="js/ui/header.js"></script>
+<script src="js/api/teams.js"></script>
+<script src="js/api/finances.js"></script>
+<script>
+// عبارات واضحة بديلة عن أسماء الأسباب التقنية الخام، مع سياق الطرف الثاني
+// (الخصم، المباراة، اللاعب) لما يتوفر — بدل ما يشوف المستخدم كود برمجي
+function describeEntry(r){
+  const reason = r.reason;
+  const week = r.match?.week?.week_number;
+  const weekSuffix = week ? ` — الأسبوع ${week}` : "";
+
+  if(reason === "match_result"){
+    if(!r.match) return r.delta >= 0 ? "فوز بمباراة" : "خسارة مباراة";
+    const opponent = (r.match.team_a_id === r.team_id ? r.match.team_b?.name : r.match.team_a?.name) || "فريق";
+    return (r.delta >= 0 ? `فوز على ${opponent}` : `خسارة أمام ${opponent}`) + weekSuffix;
+  }
+  if(reason === "loan_fee"){
+    const player = r.loan?.player?.full_name || "لاعب مستعار";
+    const owner = r.loan?.original_team?.name;
+    return `رسم إعارة "${player}"${owner ? " — إلى " + owner : ""}` + weekSuffix;
+  }
+  if(reason === "loan_fee_credit"){
+    const player = r.loan?.player?.full_name || "لاعب معار";
+    const borrower = r.loan?.borrowing_team?.name;
+    return `استلام رسم إعارة "${player}"${borrower ? " — من " + borrower : ""}` + weekSuffix;
+  }
+  if(reason === "prediction_reward") return `جائزة توقّع نتيجة صحيحة${weekSuffix}`;
+  if(reason === "season_init") return "الرصيد الابتدائي عند بداية الموسم";
+  if(reason === "admin_adjustment") return `تعديل من الإدارة${r.note ? ": " + r.note : ""}`;
+  if(reason === "admin_reversal") return `تصحيح/إلغاء حركة سابقة${r.note ? ": " + r.note : ""}`;
+
+  const FALLBACK_LABELS = {
+    photo_fee: "نشر صورة فريق", featured_photo_fee: "حجز يوم إبراز", featured_photo_refund: "استرجاع رسم إبراز",
+  };
+  return r.note || FALLBACK_LABELS[reason] || reason;
+}
+
+async function renderFinances(){
+  const [teams, ledger] = await Promise.all([listTeams(), listAllLedgerWithContext()]);
+  const byTeam = new Map(teams.map(t => [t.id, []]));
+  for(const r of ledger){
+    if(byTeam.has(r.team_id)) byTeam.get(r.team_id).push(r);
+  }
+
+  document.getElementById("financesWrap").innerHTML = teams.map(t => {
+    const rows = byTeam.get(t.id) || [];
+    const rowsHtml = rows.length
+      ? rows.map(r => `
+        <div class="fin-row">
+          <div>
+            <div class="desc">${describeEntry(r)}</div>
+            <div class="when">${timeAgo(r.created_at)}</div>
+          </div>
+          <div class="delta ${r.delta >= 0 ? 'pos' : 'neg'}">${r.delta >= 0 ? '+' : ''}${r.delta}<span style="font-size:10px;"> و</span></div>
+        </div>
+      `).join("")
+      : `<div class="fin-empty">لا توجد حركات مالية بعد</div>`;
+
+    return `
+      <div class="card glass fin-team-card">
+        <div class="fin-team-head">
+          <span class="name">
+            <span class="badge" style="background:${t.primary_color || '#0f2a4a'};"></span>
+            ${t.name}
+          </span>
+          <span class="balance">${t.balance_wathaq}<span style="font-size:11px;"> و</span></span>
+        </div>
+        ${rowsHtml}
+      </div>
+    `;
+  }).join("");
+}
+
+(async function(){
+  const profile = await requireAuth();
+  if(!profile) return;
+  renderHeader(profile, "finances");
+  await renderFinances();
+
+  sb.channel("finances-live")
+    .on("postgres_changes", { event: "*", schema: "public", table: "balance_ledger" }, renderFinances)
+    .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, renderFinances)
+    .subscribe();
+})();
+</script>
+</body>
+</html>

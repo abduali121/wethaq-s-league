@@ -27,6 +27,9 @@ function renderHeader(profile, activePage){
     { href: `${rootPrefix}standings.html`, label: "الرئيسية", icon: "🏠", key: "standings" },
     { href: `${rootPrefix}scoreboard.html`, label: "عدّاد النقاط", icon: "🔢", key: "scoreboard" },
   ];
+  if(profile){
+    tabs.push({ href: `${rootPrefix}finances.html`, label: "الأمور المالية", icon: "💰", key: "finances" });
+  }
   if(profile && profile.team_id){
     tabs.push({ href: `${rootPrefix}team-room.html?id=${profile.team_id}`, label: "غرفتي", icon: "🎽", key: "team-room" });
   }
