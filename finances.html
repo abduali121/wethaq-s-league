@@ -75,10 +75,10 @@ function rowHtml(desc, delta, bal){
   `;
 }
 
-function headRowHtml(){
+function headRowHtml(balLabel){
   return `
     <div class="fin-row head">
-      <div>الحدث</div><div>التغيير</div><div>الرصيد</div>
+      <div>الحدث</div><div>التغيير</div><div>${balLabel || 'الرصيد'}</div>
     </div>
   `;
 }
@@ -110,8 +110,12 @@ function renderTeamCards(){
     const mainHtml = main.length
       ? headRowHtml() + main.map(e => rowHtml(e.desc, e.delta, e.balanceAfter)).join("")
       : `<div class="fin-empty">لا توجد أحداث بعد</div>`;
+    // عمود "الرصيد" هنا إجمالي مستقل لأرباح تأجير اللاعبين بس (مو رصيد الفريق العام)،
+    // عشان ما يتعارض بصريًا مع جدول الأحداث الرئيسي اللي ينتهي برصيد الفريق الفعلي
+    let creditRunning = 0;
     const creditsHtml = credits.length
-      ? `<div class="fin-subhead">مكافآت الاستعارة</div>` + headRowHtml() + credits.map(e => rowHtml(e.desc, e.delta, e.balanceAfter)).join("")
+      ? `<div class="fin-subhead">مكافآت الاستعارة</div>` + headRowHtml("الإجمالي") +
+        credits.map(e => { creditRunning += e.delta; return rowHtml(e.desc, e.delta, creditRunning); }).join("")
       : "";
 
     return `
