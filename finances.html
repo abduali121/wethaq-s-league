@@ -33,6 +33,10 @@
   .fin-row:last-child{ border-bottom:none; }
   .fin-row.head{ font-size:10px;font-weight:800;color:var(--text2);background:var(--surface2); }
   .fin-row .desc{ font-weight:600;line-height:1.5; }
+  .fin-row .desc .tag{
+    display:inline-block;font-size:9.5px;font-weight:800;color:var(--green);background:var(--green-bg);
+    padding:1px 6px;border-radius:6px;margin-inline-start:6px;vertical-align:middle;
+  }
   .fin-row .delta{ font-weight:800;text-align:center; }
   .fin-row .delta.pos{ color:var(--green); }
   .fin-row .delta.neg{ color:var(--red); }
@@ -101,22 +105,19 @@ function onFilterWeek(week){
   renderTeamCards();
 }
 
+// جدول واحد فقط بترتيب زمني حقيقي، وعمود "الرصيد" هو رصيد الفريق الفعلي الكامل
+// في كل لحظة (مو مجموع فرعي منفصل) — صفوف "مكافآت الاستعارة" متميزة بوسم لوني
+// بس داخل نفس الجدول، عشان الرقم يبقى مفهوم ومتسلسل بدون قفزات غريبة
 function renderTeamCards(){
   document.getElementById("teamsWrap").innerHTML = allTeams.map(t => {
     const events = (eventsByTeam.get(t.id) || []).filter(e => activeWeek === null || e.week === activeWeek);
-    const main = events.filter(e => e.kind === "main");
-    const credits = events.filter(e => e.kind === "credit");
 
-    const mainHtml = main.length
-      ? headRowHtml() + main.map(e => rowHtml(e.desc, e.delta, e.balanceAfter)).join("")
+    const rowsHtml = events.length
+      ? headRowHtml() + events.map(e => {
+          const desc = e.kind === "credit" ? `${e.desc}<span class="tag">مكافأة استعارة</span>` : e.desc;
+          return rowHtml(desc, e.delta, e.balanceAfter);
+        }).join("")
       : `<div class="fin-empty">لا توجد أحداث بعد</div>`;
-    // عمود "الرصيد" هنا إجمالي مستقل لأرباح تأجير اللاعبين بس (مو رصيد الفريق العام)،
-    // عشان ما يتعارض بصريًا مع جدول الأحداث الرئيسي اللي ينتهي برصيد الفريق الفعلي
-    let creditRunning = 0;
-    const creditsHtml = credits.length
-      ? `<div class="fin-subhead">مكافآت الاستعارة</div>` + headRowHtml("الإجمالي") +
-        credits.map(e => { creditRunning += e.delta; return rowHtml(e.desc, e.delta, creditRunning); }).join("")
-      : "";
 
     return `
       <div class="card glass fin-team-card">
@@ -127,8 +128,7 @@ function renderTeamCards(){
           </span>
           <span class="balance">${t.balance_wathaq}</span>
         </div>
-        ${mainHtml}
-        ${creditsHtml}
+        ${rowsHtml}
       </div>
     `;
   }).join("");
